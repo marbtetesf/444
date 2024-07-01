@@ -67,6 +67,7 @@
 #include <libstdlib/stdlib.h>
 
 #include <libyul/YulString.h>
+#include <libyul/AsmAnalysis.h>
 #include <libyul/AsmPrinter.h>
 #include <libyul/AsmJsonConverter.h>
 #include <libyul/YulStack.h>
@@ -88,8 +89,10 @@
 #include <boost/algorithm/string/replace.hpp>
 
 #include <range/v3/algorithm/all_of.hpp>
+#include <range/v3/range/conversion.hpp>
 #include <range/v3/view/concat.hpp>
 #include <range/v3/view/map.hpp>
+#include <range/v3/view/transform.hpp>
 
 #include <fmt/format.h>
 
@@ -1287,6 +1290,157 @@ void CompilerStack::annotateInternalFunctionIDs()
 
 namespace
 {
+
+// TMP: better name?
+std::shared_ptr<Object> parseAndAnalyzeYulSourceWithoutDependencies(
+	std::string const& _name,
+	std::string const& _sourceCode,
+	std::shared_ptr<ObjectDebugData const> _debugData,
+	std::set<YulString> _fullyQualifiedDataNames,
+	EVMVersion const& _evmVersion
+)
+{
+	ErrorList errors;
+	ErrorReporter errorReporter(errors);
+	Dialect const& dialect = EVMDialect::strictAssemblyForEVMObjects(_evmVersion);
+	CharStream charStream(_sourceCode, ""); // TMP: source name
+	auto const scanner = std::make_shared<Scanner>(charStream);
+
+	auto const debugMessageWithSourceAndErrors = [&]() {
+		return fmt::format(
+			"Invalid IR generated:\n{}\n\n"
+			"Errors reported during parsing and analysis of IR object {}:\n{}\n",
+			_sourceCode,
+			_name,
+			langutil::SourceReferenceFormatter::formatErrorInformation(
+				errorReporter.errors(),
+				SingletonCharStreamProvider(charStream)
+			)
+		);
+	};
+
+	ObjectParser objectParser(errorReporter, dialect);
+	std::shared_ptr<Object> object = objectParser.parse(scanner, false /* _reuseScanner */, _debugData->sourceNames);
+	solAssert(object && errorReporter.errors().empty(), debugMessageWithSourceAndErrors());
+	// TMP: other asserts?
+
+	solAssert(object->debugData->sourceNames == _debugData->sourceNames);
+	solAssert(object->name == "object"_yulstring);
+	object->debugData = std::move(_debugData);
+	object->name = YulString{_name};
+
+	object->analysisInfo = std::make_shared<AsmAnalysisInfo>();
+	AsmAnalyzer asmAnalyzer(
+		*object->analysisInfo,
+		errorReporter,
+		dialect,
+		{}, // _resolver
+		std::move(_fullyQualifiedDataNames)
+	);
+
+	bool analysisSuccessful = asmAnalyzer.analyze(*object->code);
+	solAssert(analysisSuccessful, debugMessageWithSourceAndErrors());
+
+	return object;
+}
+
+}
+
+void CompilerStack::parseAndAnalyzeYul(ContractDefinition const& _contract)
+{
+	solAssert(m_stackState >= AnalysisSuccessful);
+
+	Contract& contractInfo = m_contracts.at(_contract.fullyQualifiedName());
+	solAssert(contractInfo.yulIRGeneratorOutput.has_value());
+	solAssert(contractInfo.yulIRGeneratorOutput->isValid());
+	IRGeneratorOutput::Creation creation = contractInfo.yulIRGeneratorOutput->creation;
+	IRGeneratorOutput::Deployed deployed = contractInfo.yulIRGeneratorOutput->deployed;
+
+	auto const resolveContract = [this](ContractDefinition const* _contractToResolve) -> IRGeneratorOutput const& {
+		Contract const& contractInfoToResolve = m_contracts.at(_contractToResolve->fullyQualifiedName());
+		solAssert(contractInfoToResolve.yulIRGeneratorOutput.has_value());
+		return *contractInfoToResolve.yulIRGeneratorOutput;
+	};
+
+	static auto const toString = [](std::string _string) { return YulString{_string}; };
+
+	std::set<std::string> creationDataNames = contractInfo.yulIRGeneratorOutput->qualifiedDataNames(resolveContract);
+	std::set<std::string> deployedDataNames = deployed.qualifiedDataNames(resolveContract);
+
+	std::shared_ptr<Object> creationObject = parseAndAnalyzeYulSourceWithoutDependencies(
+		creation.name,
+		creation.code,
+		creation.debugData,
+		creationDataNames | ranges::views::transform(toString) | ranges::to<std::set>,
+		m_evmVersion
+	);
+	std::shared_ptr<Object> deployedObject = parseAndAnalyzeYulSourceWithoutDependencies(
+		deployed.name,
+		deployed.code,
+		deployed.debugData,
+		deployedDataNames | ranges::views::transform(toString) | ranges::to<std::set>,
+		m_evmVersion
+	);
+	solAssert(creationObject && creationObject->subObjects.empty());
+	solAssert(deployedObject && deployedObject->subObjects.empty());
+
+	creationObject->addSubNode(deployedObject);
+	if (deployed.metadata)
+		deployedObject->addSubNode(deployed.metadata);
+
+	contractInfo.yulIRObjectWithoutDependencies = std::move(creationObject);
+}
+
+void CompilerStack::optimizeYul(ContractDefinition const& _contract)
+{
+	solAssert(m_stackState >= AnalysisSuccessful);
+
+	Contract& contractInfo = m_contracts.at(_contract.fullyQualifiedName());
+	solAssert(contractInfo.yulIRObjectWithoutDependencies);
+
+	YulStack::optimize(
+		// TMP: Do not do it in place?
+		*contractInfo.yulIRObjectWithoutDependencies,
+		true, // _isCreation
+		EVMDialect::strictAssemblyForEVMObjects(m_evmVersion),
+		m_optimiserSettings
+	);
+}
+
+std::shared_ptr<Object> CompilerStack::linkIRObject(ContractDefinition const& _contract) const
+{
+	Contract const& contractInfo = contract(_contract.fullyQualifiedName());
+	solAssert(contractInfo.yulIRGeneratorOutput.has_value());
+	solAssert(contractInfo.yulIRObjectWithoutDependencies);
+
+	std::shared_ptr<Object> fullCreationObject = contractInfo.yulIRObjectWithoutDependencies->structuralClone();
+	solAssert(fullCreationObject->name.str() == contractInfo.yulIRGeneratorOutput->creation.name);
+	solAssert(fullCreationObject->subObjects.size() == 1);
+	solAssert(fullCreationObject->subObjects[0]);
+	for (ContractDefinition const* dependency: contractInfo.yulIRGeneratorOutput->creation.dependencies)
+		fullCreationObject->addSubNode(linkIRObject(*dependency));
+
+	auto* fullDeployedObject = dynamic_cast<Object*>(fullCreationObject->subObjects[0].get());
+	solAssert(fullDeployedObject->name.str() == contractInfo.yulIRGeneratorOutput->deployed.name);
+	solAssert(fullDeployedObject->subObjects.size() <= 1);
+
+	bool hasMetadata = (fullDeployedObject->subObjects.size() != 0);
+	if (hasMetadata)
+		solAssert(fullDeployedObject->subObjects[0] == contractInfo.yulIRGeneratorOutput->deployed.metadata);
+	fullDeployedObject->subObjects.clear();
+	fullDeployedObject->subIndexByName.clear();
+
+	for (ContractDefinition const* dependency: contractInfo.yulIRGeneratorOutput->deployed.dependencies)
+		fullDeployedObject->addSubNode(linkIRObject(*dependency));
+
+	if (hasMetadata)
+		fullDeployedObject->addSubNode(contractInfo.yulIRGeneratorOutput->deployed.metadata);
+
+	return fullCreationObject;
+}
+
+namespace
+{
 bool onlySafeExperimentalFeaturesActivated(std::set<ExperimentalFeature> const& features)
 {
 	for (auto const feature: features)
@@ -1461,26 +1615,49 @@ void CompilerStack::generateIR(ContractDefinition const& _contract)
 		);
 	}
 	compiledContract.yulIR = linkIR(compiledContract);
+	// TMP:
+	solAssert(!compiledContract.yulIRObjectWithoutDependencies);
+	parseAndAnalyzeYul(*compiledContract.contract);
 
-	yul::YulStack stack(
-		m_evmVersion,
-		m_eofVersion,
-		yul::YulStack::Language::StrictAssembly,
-		m_optimiserSettings,
-		m_debugInfoSelection
-	);
-	bool yulAnalysisSuccessful = stack.parseAndAnalyze("", compiledContract.yulIR);
-	solAssert(
-		yulAnalysisSuccessful,
-		compiledContract.yulIR + "\n\n"
-		"Invalid IR generated:\n" +
-		langutil::SourceReferenceFormatter::formatErrorInformation(stack.errors(), stack) + "\n"
-	);
+	std::shared_ptr<Object> irObject = linkIRObject(*compiledContract.contract);
 
-	compiledContract.yulIRAst = stack.astJson();
-	stack.optimize();
-	compiledContract.yulIROptimized = stack.print(this);
-	compiledContract.yulIROptimizedAst = stack.astJson();
+	optimizeYul(*compiledContract.contract);
+	std::shared_ptr<Object> optimizedIRObject = linkIRObject(*compiledContract.contract);
+
+	compiledContract.yulIROptimized = optimizedIRObject->toString(
+		&EVMDialect::strictAssemblyForEVMObjects(m_evmVersion),
+		m_debugInfoSelection,
+		this // _soliditySourceProvider // TMP:
+	) + "\n";
+
+	auto const reparseYul = [&](std::string const& _irSource) {
+		YulStack stack(
+			m_evmVersion,
+			m_eofVersion,
+			YulStack::Language::StrictAssembly,
+			m_optimiserSettings,
+			m_debugInfoSelection
+		);
+		bool yulAnalysisSuccessful = stack.parseAndAnalyze("", _irSource);
+		solAssert(
+			yulAnalysisSuccessful,
+			_irSource + "\n\n"
+			"Invalid IR generated:\n" +
+			langutil::SourceReferenceFormatter::formatErrorInformation(stack.errors(), stack) + "\n"
+		);
+		return stack;
+	};
+
+	{
+		YulStack stack = reparseYul(compiledContract.yulIR);
+		compiledContract.yulIRAst = stack.astJson();
+	}
+	{
+		// Optimizer does not maintain correct native source locations in the AST.
+		// We can work around it by regenerating the AST from scratch from optimized IR.
+		YulStack stack = reparseYul(compiledContract.yulIROptimized);
+		compiledContract.yulIROptimizedAst = stack.astJson();
+	}
 }
 
 void CompilerStack::generateEVMFromIR(ContractDefinition const& _contract)

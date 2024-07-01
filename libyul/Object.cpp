@@ -92,6 +92,43 @@ std::string ObjectDebugData::formatUseSrcComment() const
 	return "/// @use-src " + serializedSourceNames + "\n";
 }
 
+std::shared_ptr<Object> Object::structuralClone() const
+{
+	std::vector<std::shared_ptr<ObjectNode>> clonedSubObjects;
+	for (std::shared_ptr<ObjectNode> subNode: subObjects)
+		if (auto const* subObject = dynamic_cast<Object const*>(subNode.get()))
+			clonedSubObjects.push_back(subObject->structuralClone());
+		else
+			clonedSubObjects.push_back(subNode);
+
+	// TMP: Add constructors?
+	auto clonedObject = std::make_shared<Object>();
+	clonedObject->name = name;
+	clonedObject->code = code;
+	clonedObject->subId = subId;
+	clonedObject->subObjects = std::move(clonedSubObjects);
+	clonedObject->subIndexByName = subIndexByName;
+	clonedObject->analysisInfo = analysisInfo;
+	clonedObject->debugData = debugData;
+	return clonedObject;
+}
+
+void Object::addSubNode(std::shared_ptr<ObjectNode> _subNode)
+{
+	yulAssert(_subNode);
+
+	size_t index = subObjects.size();
+	subIndexByName[_subNode->name] = index;
+
+	if (auto* subObject = dynamic_cast<Object*>(_subNode.get()))
+	{
+		yulAssert(subObject->subId == std::numeric_limits<size_t>::max());
+		subObject->subId = index;
+	}
+
+	subObjects.push_back(std::move(_subNode));
+}
+
 Json Object::toJson() const
 {
 	yulAssert(code, "No code");
@@ -114,6 +151,8 @@ Json Object::toJson() const
 
 std::set<YulString> Object::qualifiedDataNames() const
 {
+	// NOTE: The implementation here should be kept in sync with IRGeneratorOutput::qualifiedDataNames()
+
 	std::set<YulString> qualifiedNames =
 		name.empty() || util::contains(name.str(), '.') ?
 		std::set<YulString>{} :
