@@ -915,6 +915,71 @@ BOOST_AUTO_TEST_CASE(no_edges)
 	BOOST_TEST(dominatorFinder.dominatorTree() == test.expectedDominatorTree);
 }
 
+BOOST_AUTO_TEST_CASE(dominance_frontier)
+{
+	DominatorFinderTest test(
+		{"B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8"},
+		{
+			Edge("B0", "B1"),
+			Edge("B1", "B2"),
+			Edge("B1", "B5"),
+			Edge("B2", "B3"),
+			Edge("B3", "B4"),
+			Edge("B3", "B1"),
+			Edge("B5", "B6"),
+			Edge("B5", "B8"),
+			Edge("B6", "B7"),
+			Edge("B8", "B7"),
+			Edge("B7", "B3")
+		},
+		{
+			{"B0", ""},
+			{"B1", "B0"},
+			{"B2", "B1"},
+			{"B3", "B1"},
+			{"B4", "B3"},
+			{"B5", "B1"},
+			{"B6", "B5"},
+			{"B7", "B5"},
+			{"B8", "B5"},
+		},
+		{
+			{"B0", 0},
+			{"B1", 1},
+			{"B2", 2},
+			{"B3", 3},
+			{"B4", 4},
+			{"B5", 5},
+			{"B6", 6},
+			{"B7", 7},
+			{"B8", 8},
+		},
+		{
+			{"B0", {"B1"}},
+			{"B1", {"B2", "B3", "B5"}},
+			{"B3", {"B4"}},
+			{"B5", {"B6", "B7", "B8"}}
+		}
+	);
+
+	TestDominatorFinder dominatorFinder(*test.entry);
+	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
+	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
+	BOOST_TEST(dominatorFinder.dominatorTree() == test.expectedDominatorTree);
+
+	std::map<TestVertexId, std::vector<TestVertexId>> expectedDominanceFrontier = {
+		{test.vertexIdMap.at("B1"), {test.vertexIdMap.at("B1")}},
+		{test.vertexIdMap.at("B2"), {test.vertexIdMap.at("B3")}},
+		{test.vertexIdMap.at("B3"), {test.vertexIdMap.at("B1")}},
+		{test.vertexIdMap.at("B5"), {test.vertexIdMap.at("B3")}},
+		{test.vertexIdMap.at("B6"), {test.vertexIdMap.at("B7")}},
+		{test.vertexIdMap.at("B7"), {test.vertexIdMap.at("B3")}},
+		{test.vertexIdMap.at("B8"), {test.vertexIdMap.at("B7")}},
+	};
+
+	BOOST_TEST(dominatorFinder.dominanceFrontier() == expectedDominanceFrontier);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 } // namespace solidity::util::test
