@@ -26,6 +26,9 @@
 #include <fmt/format.h>
 
 #include <range/v3/range/conversion.hpp>
+#include <range/v3/view/filter.hpp>
+#include <range/v3/view/join.hpp>
+#include <range/v3/view/map.hpp>
 #include <range/v3/view/transform.hpp>
 
 using namespace solidity::util;
@@ -82,6 +85,42 @@ public:
 		// Populate the successors of the vertices.
 		for (auto const& [from, to]: _edges)
 			vertices[vertexIdMap[from]].successors.emplace_back(&vertices[vertexIdMap[to]]);
+
+		// Validate that all vertices used in the expected results are part of the graph.
+		std::set<TestVertexLabel> verticesSet = _vertices | ranges::to<std::set<TestVertexLabel>>;
+		auto validateVertices = [&](std::set<TestVertexLabel> const& labels) {
+			if (verticesSet.size() != labels.size())
+				soltestAssert(std::includes(verticesSet.begin(), verticesSet.end(), labels.begin(), labels.end()));
+			else
+				soltestAssert(std::equal(verticesSet.begin(), verticesSet.end(), labels.begin(), labels.end()));
+		};
+
+		validateVertices(_edges
+			| ranges::views::transform([](Edge const& e) { return e.first; })
+			| ranges::to<std::set<TestVertexLabel>>
+		);
+		validateVertices(_edges
+			| ranges::views::transform([](Edge const& e) { return e.second; })
+			| ranges::to<std::set<TestVertexLabel>>
+		);
+		validateVertices(_expectedImmediateDominators | ranges::views::keys | ranges::to<std::set<TestVertexLabel>>);
+		// The entry vertex does not have an immediate dominator.
+		validateVertices(_expectedImmediateDominators
+			| ranges::views::values
+			| ranges::views::filter([](TestVertexLabel const& label) { return !label.empty(); })
+			| ranges::to<std::set<TestVertexLabel>>
+		);
+		validateVertices(_expectedDFSIndices | ranges::views::keys | ranges::to<std::set<TestVertexLabel>>);
+		bool allDFSIndexInRange = std::all_of(
+			_expectedDFSIndices.begin(),
+			_expectedDFSIndices.end(),
+			[&](auto const& pair) {
+				return pair.second < verticesSet.size();
+			}
+		);
+		solAssert(allDFSIndexInRange);
+		validateVertices(_expectedDominatorTree | ranges::views::keys | ranges::to<std::set<TestVertexLabel>>);
+		validateVertices(_expectedDominatorTree | ranges::views::values | ranges::views::join | ranges::to<std::set<TestVertexLabel>>);
 
 		entry = &vertices[0];
 		expectedImmediateDominators = labelMapToIdMap(_expectedImmediateDominators);
