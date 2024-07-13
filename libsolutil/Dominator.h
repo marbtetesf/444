@@ -78,17 +78,18 @@ public:
 		return m_dfsIndexByVertexId;
 	}
 
-	std::map<VId, VId> const immediateDominators() const
+	std::map<VId, std::optional<VId>> const immediateDominators() const
 	{
 		return m_immediateDominators
 			| ranges::views::enumerate
 			| ranges::views::transform([&](auto const& _v) {
-				return std::make_pair(m_verticesInDFSOrder[_v.first], m_verticesInDFSOrder[_v.second]);
+				std::optional<VId> idomId = (_v.second.has_value()) ? std::optional<VId>(m_verticesInDFSOrder[_v.second.value()]) : std::nullopt;
+				return std::make_pair(m_verticesInDFSOrder[_v.first], idomId);
 			})
-			| ranges::to<std::map<VId, VId>>;
+			| ranges::to<std::map<VId, std::optional<VId>>>;
 	}
 
-	std::vector<DfsIndex> const& immediateDominatorsByDfsIndex() const
+	std::vector<std::optional<DfsIndex>> const& immediateDominatorsByDfsIndex() const
 	{
 		return m_immediateDominators;
 	}
@@ -110,15 +111,15 @@ public:
 		if (dominatorIdx == dominatedIdx)
 			return true;
 
-		DfsIndex idomIdx = m_immediateDominators.at(dominatedIdx);
+		DfsIndex idomIdx = m_immediateDominators.at(dominatedIdx).value_or(0);
 		while (idomIdx != 0)
 		{
 			solAssert(idomIdx < m_immediateDominators.size());
 			if (idomIdx == dominatorIdx)
 				return true;
 			// The index of the immediate dominator of a vertex is always less than the index of the vertex itself.
-			solAssert(m_immediateDominators.at(idomIdx) < idomIdx);
-			idomIdx = m_immediateDominators[idomIdx];
+			solAssert(m_immediateDominators.at(idomIdx).has_value() && m_immediateDominators.at(idomIdx).value() < idomIdx);
+			idomIdx = m_immediateDominators[idomIdx].value();
 		}
 		// Now that we reached the entry node (i.e. idomIdx = 0),
 		// either ``dominatorIdx == 0`` or it does not dominate the other node.
@@ -149,15 +150,15 @@ public:
 			return {};
 
 		solAssert(m_dfsIndexByVertexId.at(_vId) < m_immediateDominators.size());
-		DfsIndex idomIdx = m_immediateDominators.at(m_dfsIndexByVertexId.at(_vId));
+		DfsIndex idomIdx = m_immediateDominators.at(m_dfsIndexByVertexId.at(_vId)).value_or(0);
 		solAssert(idomIdx < m_immediateDominators.size());
 
 		std::vector<VId> dominators;
 		while (idomIdx != 0)
 		{
-			solAssert(m_immediateDominators.at(idomIdx) < idomIdx);
+			solAssert(m_immediateDominators.at(idomIdx).has_value() && m_immediateDominators.at(idomIdx).value() < idomIdx);
 			dominators.emplace_back(m_verticesInDFSOrder.at(idomIdx));
-			idomIdx = m_immediateDominators[idomIdx];
+			idomIdx = m_immediateDominators[idomIdx].value();
 		}
 
 		// The loop above discovers the dominators in the reverse order
@@ -176,7 +177,7 @@ public:
 	}
 
 private:
-	std::vector<DfsIndex> findDominators(V const& _entry)
+	std::vector<std::optional<DfsIndex>> findDominators(V const& _entry)
 	{
 		solAssert(m_verticesInDFSOrder.empty());
 		solAssert(m_dfsIndexByVertexId.empty());
@@ -228,7 +229,7 @@ private:
 		solAssert(parent.size() == numVertices);
 
 		// ancestor(w): Parent of vertex ``w`` in the virtual forest traversed by eval().
-		// The forest consists of disjoint subtress of the spanning tree and the parent of ``w`` is
+		// The forest consists of disjoint subtrees of the spanning tree and the parent of ``w`` is
 		// always one of its ancestors in that spanning tree.
 		// Initially each subtree consists of a single vertex. As the algorithm iterates over the
 		// graph, each processed vertex gets connected to its parent from the spanning tree using
@@ -245,7 +246,7 @@ private:
 		// semi(w): The DFS index of the semidominator of ``w``.
 		std::vector<DfsIndex> semi;
 		// idom(w): The DFS index of the immediate dominator of ``w``.
-		std::vector<DfsIndex> idom(numVertices, std::numeric_limits<DfsIndex>::max());
+		std::vector<std::optional<DfsIndex>> idom(numVertices, std::nullopt);
 
 		// ``link(v, w)`` adds an edge from ``w`` to ``v`` in the virtual forest.
 		// It is meant to initially attach vertex ``w`` to its parent from the spanning tree,
@@ -312,10 +313,15 @@ private:
 
 		// step 4
 		// Compute idom in DFS order
-		idom[0] = 0;
+		// The entry vertex does not have an immediate dominator.
+		idom[0] = std::nullopt;
 		for (DfsIndex wIdx: m_verticesInDFSOrder | ranges::views::drop(1) | ranges::views::transform(toDfsIndex))
-			if (idom[wIdx] != semi[wIdx])
-				idom[wIdx] = idom[idom[wIdx]];
+		{
+			// All the other vertices must have an immediate dominator.
+			solAssert(idom[wIdx].has_value());
+			if (idom[wIdx].value() != semi[wIdx])
+				idom[wIdx] = idom[idom[wIdx].value()];
+		}
 
 		return idom;
 	}
@@ -350,7 +356,7 @@ private:
 		// m_immediateDominators is guaranteed to have at least one element after findingDominators() is executed.
 		solAssert(m_immediateDominators.size() > 0);
 		solAssert(m_immediateDominators.size() == m_verticesInDFSOrder.size());
-		solAssert(m_immediateDominators[0] == 0);
+		solAssert(m_immediateDominators[0] == std::nullopt);
 
 		// Ignoring the entry node since no one dominates it.
 		for (DfsIndex dominatedIdx = 1; dominatedIdx < m_verticesInDFSOrder.size(); ++dominatedIdx)
@@ -359,8 +365,13 @@ private:
 			solAssert(m_dfsIndexByVertexId.count(dominatedId));
 			solAssert(dominatedIdx == m_dfsIndexByVertexId.at(dominatedId));
 
-			VId dominatorId = m_verticesInDFSOrder[m_immediateDominators[dominatedIdx]];
-			solAssert(m_immediateDominators[dominatedIdx] < dominatedIdx);
+			// If the vertex does not have an immediate dominator, it is the entry vertex (i.e. index 0).
+			// NOTE: `dominatedIdx` will never be 0 since the loop starts from 1.
+			solAssert(m_immediateDominators[dominatedIdx].has_value());
+			DfsIndex dominatorIdx = m_immediateDominators[dominatedIdx].value();
+
+			solAssert(dominatorIdx < dominatedIdx);
+			VId dominatorId = m_verticesInDFSOrder[dominatorIdx];
 			m_dominatorTree[dominatorId].emplace_back(dominatedId);
 		}
 	}
@@ -387,13 +398,14 @@ private:
 
 	/// Immediate dominators by DFS index.
 	/// Maps a vertex' DFS index (i.e. array index) to its immediate dominator DFS index.
-	/// The entry vertex is the first element of the vector.
+	/// As the entry vertex does not have immediate dominator, its idom is always set to `std::nullopt`.
+	/// However note that the DFS index of the entry vertex is 0, since it is the first element of the vector.
 	///
 	/// E.g. to get the immediate dominator of a Vertex w:
 	/// idomIdx = m_immediateDominators[m_dfsIndexByVertexId[w.id]]
 	/// idomVertexId = m_verticesInDFSOrder[domIdx]
 	///
 	/// DFS index -> dominates DFS index
-	std::vector<DfsIndex> m_immediateDominators;
+	std::vector<std::optional<DfsIndex>> m_immediateDominators;
 };
 }

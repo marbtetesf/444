@@ -90,13 +90,13 @@ public:
 	}
 
 	// Converts a map of vertex labels to map of vertex IDs
-	std::map<TestVertexId, TestVertexId> labelMapToIdMap(std::map<TestVertexLabel, TestVertexLabel> const& _vertexLabelMap) const
+	std::map<TestVertexId, std::optional<TestVertexId>> labelMapToIdMap(std::map<TestVertexLabel, TestVertexLabel> const& _vertexLabelMap) const
 	{
 		return _vertexLabelMap
-			| ranges::views::transform([&](auto const& pair) -> std::pair<TestVertexId, TestVertexId> {
-				return {vertexIdMap.at(pair.first), vertexIdMap.at(pair.second)};
+			| ranges::views::transform([&](auto const& pair) -> std::pair<TestVertexId, std::optional<TestVertexId>> {
+				return {vertexIdMap.at(pair.first), (pair.second != "") ? std::optional<TestVertexId>(vertexIdMap.at(pair.second)) : std::nullopt};
 			})
-			| ranges::to<std::map<TestVertexId, TestVertexId>>;
+			| ranges::to<std::map<TestVertexId, std::optional<TestVertexId>>>;
 	}
 
 	// Converts a map with vertex labels as keys to a map with vertex IDs as keys.
@@ -131,7 +131,7 @@ public:
 	std::vector<TestVertex> vertices;
 	// Reverse map from vertices labels to IDs
 	std::map<TestVertexLabel, TestVertexId> vertexIdMap;
-	std::map<TestVertexId, TestVertexId> expectedImmediateDominators;
+	std::map<TestVertexId, std::optional<TestVertexId>> expectedImmediateDominators;
 	std::map<TestVertexId, TestDominatorFinder::DfsIndex> expectedDFSIndices;
 	std::map<TestVertexId, std::vector<TestVertexId>> expectedDominatorTree;
 };
@@ -169,7 +169,7 @@ BOOST_AUTO_TEST_CASE(immediate_dominator_1)
 			Edge("H", "F")
 		},
 		{ // Immediate dominators
-			{"A", "A"},
+			{"A", ""},
 			{"B", "A"},
 			{"C", "B"},
 			{"D", "B"},
@@ -228,7 +228,7 @@ BOOST_AUTO_TEST_CASE(immediate_dominator_2)
 			Edge("G", "C")
 		},
 		{
-			{"A", "A"},
+			{"A", ""},
 			{"B", "A"},
 			{"C", "A"},
 			{"D", "A"},
@@ -250,6 +250,7 @@ BOOST_AUTO_TEST_CASE(immediate_dominator_2)
 			{"D", {"E", "F"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -301,7 +302,7 @@ BOOST_AUTO_TEST_CASE(immediate_dominator_3)
 			Edge("I", "H")
 		},
 		{
-			{"A", "A"},
+			{"A", ""},
 			{"B", "A"},
 			{"C", "A"},
 			{"D", "A"},
@@ -328,6 +329,7 @@ BOOST_AUTO_TEST_CASE(immediate_dominator_3)
 			{"E", {"F"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -364,7 +366,7 @@ BOOST_AUTO_TEST_CASE(langauer_tarjan_p122_fig1)
 			Edge("I", "K")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"A", "R"},
 			{"B", "R"},
 			{"C", "R"},
@@ -400,6 +402,7 @@ BOOST_AUTO_TEST_CASE(langauer_tarjan_p122_fig1)
 			{"G", {"J"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -432,7 +435,7 @@ BOOST_AUTO_TEST_CASE(loukas_georgiadis)
 			Edge("X7", "X6")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"W", "R"},
 			{"X1", "R"},
 			{"X2", "R"},
@@ -459,6 +462,7 @@ BOOST_AUTO_TEST_CASE(loukas_georgiadis)
 			{"R", {"W", "X1", "X2", "X3", "X4", "X5", "X6", "X7", "Y"}},
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -499,7 +503,7 @@ BOOST_AUTO_TEST_CASE(itworst)
 			Edge("Z3", "Z2")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"W1", "R"},
 			{"W2", "R"},
 			{"W3", "R"},
@@ -537,6 +541,7 @@ BOOST_AUTO_TEST_CASE(itworst)
 			{"Y2", {"Y3"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -568,7 +573,7 @@ BOOST_AUTO_TEST_CASE(idfsquad)
 			Edge("Z3", "Y3")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"X1", "R"},
 			{"X2", "X1"},
 			{"X3", "X2"},
@@ -597,6 +602,7 @@ BOOST_AUTO_TEST_CASE(idfsquad)
 			{"X2", {"X3"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -622,7 +628,7 @@ BOOST_AUTO_TEST_CASE(ibsfquad)
 			Edge("X2", "X1")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"W", "R"},
 			{"X1", "R"},
 			{"X2", "R"},
@@ -644,6 +650,7 @@ BOOST_AUTO_TEST_CASE(ibsfquad)
 			{"Y", {"Z"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -669,7 +676,7 @@ BOOST_AUTO_TEST_CASE(sncaworst)
 			Edge("X3", "Y3")
 		},
 		{
-			{"R", "R"},
+			{"R", ""},
 			{"X1", "R"},
 			{"X2", "X1"},
 			{"X3", "X2"},
@@ -692,6 +699,7 @@ BOOST_AUTO_TEST_CASE(sncaworst)
 			{"X2", {"X3"}}
 		}
 	);
+
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(dominatorFinder.immediateDominators() == test.expectedImmediateDominators);
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
@@ -740,7 +748,6 @@ BOOST_AUTO_TEST_CASE(collect_all_dominators_of_a_vertex)
 			return test.vertices[id].label;
 		}) | ranges::to<std::vector<TestVertexLabel>>;
 	};
-
 
 	TestDominatorFinder dominatorFinder(*test.entry);
 	BOOST_TEST(toVertexLabel(dominatorFinder.dominatorsOf(test.vertexIdMap["A"])) == std::vector<TestVertexLabel>());
@@ -827,7 +834,6 @@ BOOST_AUTO_TEST_CASE(check_dominance)
 	soltestAssert(expectedDominanceTable.size() == test.vertices.size());
 
 	TestDominatorFinder dominatorFinder(*test.entry);
-
 	BOOST_TEST(dominatorFinder.dfsIndexById() == test.expectedDFSIndices);
 	// Check if the dominance table is as expected.
 	for (TestDominatorFinder::DfsIndex i = 0; i < expectedDominanceTable.size(); ++i)
@@ -856,7 +862,7 @@ BOOST_AUTO_TEST_CASE(no_edges)
 		{"A"},
 		{},
 		{
-			{"A", "A"},
+			{"A", ""},
 		},
 		{
 			{"A", 0},
